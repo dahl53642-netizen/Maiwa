@@ -1,0 +1,884 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  Calculator, 
+  PieChart as PieIcon, 
+  FileText, 
+  TrendingUp, 
+  DollarSign, 
+  Wheat, 
+  MapPin, 
+  Printer, 
+  RefreshCw, 
+  Info, 
+  Layers, 
+  Beef, 
+  Sparkles,
+  ChevronRight,
+  CheckCircle2,
+  BookOpen
+} from 'lucide-react';
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+
+// Data Referensi Bahan Pakan Lokal Maiwa (Kecamatan Maiwa, Kab. Enrekang)
+const LOCAL_FEEDS = [
+  { name: 'Rumput Gajah (Pennisetum purpureum)', category: 'Hijauan', bk: 20, pk: 9.5, tdn: 55, price: 300, source: 'Lahan Pertanian Maiwa' },
+  { name: 'Rumput Raja (King Grass)', category: 'Hijauan', bk: 22, pk: 10.2, tdn: 57, price: 350, source: 'Padang Penggembalaan Maiwa' },
+  { name: 'Jerami Padi Fermentasi', category: 'Limbah Pertanian', bk: 85, pk: 7.5, tdn: 48, price: 400, source: 'Sawah Sawah Maiwa' },
+  { name: 'Jagung Giling (Maiwa Yellow Corn)', category: 'Konsentrat Energi', bk: 88, pk: 8.9, tdn: 80, price: 4500, source: 'Sentra Jagung Maiwa' },
+  { name: 'Dedak Padi Halus', category: 'Konsentrat Energi', bk: 89, pk: 12.0, tdn: 65, price: 3200, source: 'Penggilingan Padi Lokal' },
+  { name: 'Bungkil Kelapa', category: 'Konsentrat Protein', bk: 90, pk: 21.5, tdn: 76, price: 4800, source: 'Olahan Kelapa Enrekang' },
+  { name: 'Daun Gamal / Gliricidia', category: 'Leguminosa', bk: 25, pk: 23.0, tdn: 62, price: 500, source: 'Pagar & Kebun Maiwa' },
+  { name: 'Daun Lamtoro', category: 'Leguminosa', bk: 30, pk: 24.2, tdn: 65, price: 600, source: 'Integrasi Kebun Maiwa' },
+];
+
+// Presets untuk Jenis Ternak
+const LIVESTOCK_TYPES = [
+  { id: 'sapi_potong', name: 'Sapi Potong / Sapi Maiwa', defaultBkPct: 3.0, defaultHijoProp: 70, defaultPkReq: 11.5, defaultTdnReq: 65 },
+  { id: 'sapi_perah', name: 'Sapi Perah', defaultBkPct: 3.5, defaultHijoProp: 60, defaultPkReq: 14.0, defaultTdnReq: 70 },
+  { id: 'kambing_domba', name: 'Kambing / Domba', defaultBkPct: 3.5, defaultHijoProp: 75, defaultPkReq: 12.0, defaultTdnReq: 62 },
+  { id: 'ayam_broiler', name: 'Ayam Broiler', defaultBkPct: 10.0, defaultHijoProp: 0, defaultPkReq: 20.0, defaultTdnReq: 78 },
+  { id: 'ayam_layer', name: 'Ayam Layer (Petelur)', defaultBkPct: 9.0, defaultHijoProp: 0, defaultPkReq: 17.5, defaultTdnReq: 72 },
+];
+
+const PHYSIOLOGICAL_STATUS = [
+  { id: 'penggemukan', name: 'Penggemukan (Fattening)', factorBk: 1.1, factorPk: 1.1 },
+  { id: 'pertumbuhan', name: 'Pertumbuhan (Growing)', factorBk: 1.0, factorPk: 1.15 },
+  { id: 'laktasi', name: 'Induk Laktasi (Menyusui)', factorBk: 1.2, factorPk: 1.25 },
+  { id: 'maintenance', name: 'Perawatan (Maintenance)', factorBk: 0.9, factorPk: 0.95 },
+];
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('kalkulator');
+
+  // State Input Parameter Ternak
+  const [selectedLivestock, setSelectedLivestock] = useState('sapi_potong');
+  const [population, setPopulation] = useState(25);
+  const [avgWeight, setAvgWeight] = useState(350); // kg
+  const [physioStatus, setPhysioStatus] = useState('penggemukan');
+  
+  // Custom Rasion / Formulasi Input
+  const [bkPercentage, setBkPercentage] = useState(3.0); // % dari bobot badan
+  const [hijauanRatio, setHijauanRatio] = useState(70); // % Hijauan
+  
+  // Asumsi Rata-rata BK Pakan Segar (% BK dari bahan segar)
+  const [avgBkHijauan, setAvgBkHijauan] = useState(22); // % BK dalam Hijauan segar
+  const [avgBkKonsentrat, setAvgBkKonsentrat] = useState(88); // % BK dalam Konsentrat
+
+  // Harga Pakan per Kg Segar (Rp)
+  const [priceHijauan, setPriceHijauan] = useState(350);
+  const [priceKonsentrat, setPriceKonsentrat] = useState(4200);
+
+  // Ganti preset ternak jika jenis berubah
+  const handleLivestockChange = (e) => {
+    const typeId = e.target.value;
+    setSelectedLivestock(typeId);
+    const found = LIVESTOCK_TYPES.find(t => t.id === typeId);
+    if (found) {
+      setBkPercentage(found.defaultBkPct);
+      setHijauanRatio(found.defaultHijoProp);
+      // Penyesuaian bobot default yang masuk akal
+      if (typeId.includes('ayam')) {
+        setAvgWeight(2.0);
+        setPopulation(500);
+      } else if (typeId.includes('kambing')) {
+        setAvgWeight(40);
+        setPopulation(50);
+      } else {
+        setAvgWeight(350);
+        setPopulation(25);
+      }
+    }
+  };
+
+  // --- PERHITUNGAN OTOMATIS (REALTIME) ---
+  const calculations = useMemo(() => {
+    const pop = Math.max(1, Number(population) || 0);
+    const weight = Math.max(0.1, Number(avgWeight) || 0);
+    const bkPct = Math.max(0.1, Number(bkPercentage) || 0);
+    const hRatio = Math.min(100, Math.max(0, Number(hijauanRatio) || 0));
+    const kRatio = 100 - hRatio;
+
+    // Faktor Penyesuaian Fisiologis
+    const statusObj = PHYSIOLOGICAL_STATUS.find(s => s.id === physioStatus) || PHYSIOLOGICAL_STATUS[0];
+    const adjustedBkPct = bkPct * statusObj.factorBk;
+
+    // 1. Kebutuhan Bahan Kering (BK)
+    const bkPerEkorHarian = (weight * adjustedBkPct) / 100; // kg BK/ekor/hari
+    const totalBkHarianKg = bkPerEkorHarian * pop; // kg BK/populasi/hari
+    const totalBkBulananKg = totalBkHarianKg * 30; // kg BK/populasi/bulan
+    const totalBkBulananTon = totalBkBulananKg / 1000;
+
+    // 2. Alokasi BK Hijauan & Konsentrat (kg BK)
+    const bkHijauanHarian = totalBkHarianKg * (hRatio / 100);
+    const bkKonsentratHarian = totalBkHarianKg * (kRatio / 100);
+
+    // 3. Konversi ke Pakan Segar (Fresh Feed / As Fed)
+    const bkHijPct = Math.max(5, Number(avgBkHijauan) || 20) / 100;
+    const bkKonPct = Math.max(10, Number(avgBkKonsentrat) || 85) / 100;
+
+    const freshHijauanHarian = hRatio > 0 ? bkHijauanHarian / bkHijPct : 0; // kg segar
+    const freshKonsentratHarian = kRatio > 0 ? bkKonsentratHarian / bkKonPct : 0; // kg segar
+    const totalFreshHarian = freshHijauanHarian + freshKonsentratHarian; // kg segar total/hari
+
+    const freshHijauanBulanan = freshHijauanHarian * 30;
+    const freshKonsentratBulanan = freshKonsentratHarian * 30;
+    const totalFreshBulanan = totalFreshHarian * 30;
+
+    // 4. Analisis Biaya (Rupiah)
+    const costHijauanHarian = freshHijauanHarian * Number(priceHijauan || 0);
+    const costKonsentratHarian = freshKonsentratHarian * Number(priceKonsentrat || 0);
+    const totalCostHarian = costHijauanHarian + costKonsentratHarian;
+
+    const totalCostBulanan = totalCostHarian * 30;
+    const costPerEkorHarian = totalCostHarian / pop;
+
+    // 5. Estimasi Kecukupan Nutrisi (PK & TDN)
+    const livestockMeta = LIVESTOCK_TYPES.find(t => t.id === selectedLivestock);
+    const reqPK = (livestockMeta ? livestockMeta.defaultPkReq : 12) * statusObj.factorPk;
+    const reqTDN = livestockMeta ? livestockMeta.defaultTdnReq : 65;
+
+    // Estimasi pasokan nutrisi dari rasio pakan (Estimasi Rata-rata Kasar)
+    // Hijauan avg: PK 10%, TDN 55%. Konsentrat avg: PK 16%, TDN 75%
+    const estPkSupply = (hRatio / 100 * 10) + (kRatio / 100 * 16);
+    const estTdnSupply = (hRatio / 100 * 55) + (kRatio / 100 * 75);
+
+    return {
+      adjustedBkPct,
+      bkPerEkorHarian,
+      totalBkHarianKg,
+      totalBkBulananKg,
+      totalBkBulananTon,
+      bkHijauanHarian,
+      bkKonsentratHarian,
+      freshHijauanHarian,
+      freshKonsentratHarian,
+      totalFreshHarian,
+      freshHijauanBulanan,
+      freshKonsentratBulanan,
+      totalFreshBulanan,
+      costHijauanHarian,
+      costKonsentratHarian,
+      totalCostHarian,
+      totalCostBulanan,
+      costPerEkorHarian,
+      reqPK,
+      reqTDN,
+      estPkSupply,
+      estTdnSupply
+    };
+  }, [
+    selectedLivestock, population, avgWeight, physioStatus, 
+    bkPercentage, hijauanRatio, avgBkHijauan, avgBkKonsentrat, 
+    priceHijauan, priceKonsentrat
+  ]);
+
+  // Data Visualisasi Grafik Pie (Proporsi Pakan Segar Harian)
+  const pieChartData = [
+    { name: 'Hijauan Segar', value: Math.round(calculations.freshHijauanHarian), color: '#10b981' },
+    { name: 'Konsentrat Segar', value: Math.round(calculations.freshKonsentratHarian), color: '#0d9488' },
+  ].filter(item => item.value > 0);
+
+  // Data Visualisasi Grafik Bar (Biaya Pakan vs Alokasi)
+  const barChartData = [
+    { name: 'Hijauan', Biaya: Math.round(calculations.costHijauanHarian), Segar: Math.round(calculations.freshHijauanHarian) },
+    { name: 'Konsentrat', Biaya: Math.round(calculations.costKonsentratHarian), Segar: Math.round(calculations.freshKonsentratHarian) },
+  ];
+
+  // Cetak Laporan Analisis
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+      
+      {/* HEADER UTAMA */}
+      <header className="bg-gradient-to-r from-emerald-800 via-teal-800 to-emerald-900 text-white shadow-lg print:hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-center space-x-4">
+              <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md border border-white/20 shadow-inner">
+                <Beef className="w-9 h-9 text-emerald-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-emerald-400/20 text-emerald-200 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-emerald-400/30">
+                    Kecamatan Maiwa, Kabupaten Enrekang
+                  </span>
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mt-1">
+                  Sistem Analisis Kebutuhan Pakan Ternak Maiwa
+                </h1>
+                <p className="text-emerald-100 text-xs sm:text-sm mt-0.5">
+                  Kalkulator Interaktif & Formulasi Alokasi Pakan berbasis Potensi Bahan Lokal Maiwa
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Stats Header */}
+            <div className="flex items-center gap-3 bg-emerald-950/40 backdrop-blur-md p-3 rounded-xl border border-white/10">
+              <MapPin className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div className="text-xs">
+                <p className="text-emerald-200 font-medium">Sentra Peternakan & Hijauan</p>
+                <p className="text-white font-bold">Kawasan Agropolitan Maiwa</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* NAVIGATION TABS */}
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm print:hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <nav className="flex space-x-2 sm:space-x-8 overflow-x-auto py-2">
+            <button
+              onClick={() => setActiveTab('kalkulator')}
+              className={`flex items-center gap-2 py-3 px-4 rounded-lg font-semibold text-sm transition-all whitespace-nowrap ${
+                activeTab === 'kalkulator'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm'
+                  : 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50'
+              }`}
+            >
+              <Calculator className="w-4 h-4" />
+              Kalkulator & Input Ternak
+            </button>
+
+            <button
+              onClick={() => setActiveTab('hasil')}
+              className={`flex items-center gap-2 py-3 px-4 rounded-lg font-semibold text-sm transition-all whitespace-nowrap ${
+                activeTab === 'hasil'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm'
+                  : 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50'
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              Hasil & Visualisasi Grafik
+            </button>
+
+            <button
+              onClick={() => setActiveTab('referensi')}
+              className={`flex items-center gap-2 py-3 px-4 rounded-lg font-semibold text-sm transition-all whitespace-nowrap ${
+                activeTab === 'referensi'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm'
+                  : 'text-slate-600 hover:text-emerald-600 hover:bg-slate-50'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              Tabel Pakan Lokal Maiwa
+            </button>
+          </nav>
+        </div>
+      </div>
+
+      {/* CONTENT AREA */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* HEADER SECTION UNTUK MODE CETAK */}
+        <div className="hidden print:block mb-8 border-b-2 border-emerald-800 pb-4">
+          <h1 className="text-2xl font-bold text-slate-900">LAPORAN ANALISIS KEBUTUHAN PAKAN TERNAK</h1>
+          <p className="text-sm text-slate-600">Lokasi: Kecamatan Maiwa, Kabupaten Enrekang | Tanggal: {new Date().toLocaleDateString('id-ID')}</p>
+        </div>
+
+        {/* TAB 1: KALKULATOR & INPUT */}
+        {activeTab === 'kalkulator' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            {/* INPUT PANEL (LEFT 7 COLS) */}
+            <div className="lg:col-span-7 space-y-6">
+              
+              {/* CARD 1: DATA TERNAK */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80">
+                <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-emerald-100 rounded-lg text-emerald-700">
+                      <Beef className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800">1. Parameter Ternak Maiwa</h2>
+                      <p className="text-xs text-slate-500">Pilih jenis ternak dan karakteristik populasi</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
+                    Langkah 1 dari 3
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {/* Jenis Ternak */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Jenis Ternak
+                    </label>
+                    <select
+                      value={selectedLivestock}
+                      onChange={handleLivestockChange}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-slate-800 font-medium focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+                    >
+                      {LIVESTOCK_TYPES.map(item => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Jumlah Populasi */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Jumlah Populasi (Ekor)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        value={population}
+                        onChange={(e) => setPopulation(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-slate-800 font-bold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+                      />
+                      <span className="absolute right-4 top-2.5 text-xs text-slate-400 font-semibold">ekor</span>
+                    </div>
+                  </div>
+
+                  {/* Rata-rata Bobot Badan */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Rata-rata Bobot (Kg / Ekor)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        value={avgWeight}
+                        onChange={(e) => setAvgWeight(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-slate-800 font-bold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+                      />
+                      <span className="absolute right-4 top-2.5 text-xs text-slate-400 font-semibold">kg</span>
+                    </div>
+                  </div>
+
+                  {/* Status Fisiologis */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Status Fisiologis / Tujuan Pemeliharaan
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {PHYSIOLOGICAL_STATUS.map((status) => (
+                        <button
+                          key={status.id}
+                          type="button"
+                          onClick={() => setPhysioStatus(status.id)}
+                          className={`px-3 py-2.5 rounded-xl text-xs font-bold transition border text-center flex flex-col items-center justify-center ${
+                            physioStatus === status.id
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {status.name.split(' ')[0]}
+                          <span className="text-[10px] font-normal opacity-80">{status.name.split(' ')[1]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 2: PENGATURAN KOMPOSISI PAKAN */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80">
+                <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-teal-100 rounded-lg text-teal-700">
+                      <Wheat className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800">2. Formulasi & Konsumsi Pakan</h2>
+                      <p className="text-xs text-slate-500">Atur % Bahan Kering (BK) dan proporsi Hijauan vs Konsentrat</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold bg-teal-100 text-teal-800 px-2.5 py-1 rounded-full">
+                    Langkah 2 dari 3
+                  </span>
+                </div>
+
+                <div className="space-y-5">
+                  {/* Slider % BK */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Kebutuhan BK (% dari Bobot Badan)
+                      </label>
+                      <span className="text-sm font-extrabold text-emerald-700 bg-emerald-50 px-3 py-0.5 rounded-md border border-emerald-200">
+                        {bkPercentage}% BB
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1.5"
+                      max="12.0"
+                      step="0.1"
+                      value={bkPercentage}
+                      onChange={(e) => setBkPercentage(e.target.value)}
+                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                    />
+                    <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+                      <span>1.5% (Standar Rumput)</span>
+                      <span>3.0% (Sapi Potong/Maiwa)</span>
+                      <span>10.0% (Unggas)</span>
+                    </div>
+                  </div>
+
+                  {/* Slider Proporsi Hijauan vs Konsentrat */}
+                  {!selectedLivestock.includes('ayam') && (
+                    <div className="pt-2">
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Proporsi Ransum (Hijauan : Konsentrat)
+                        </label>
+                        <span className="text-sm font-extrabold text-teal-700 bg-teal-50 px-3 py-0.5 rounded-md border border-teal-200">
+                          {hijauanRatio}% H : {100 - hijauanRatio}% K
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={hijauanRatio}
+                        onChange={(e) => setHijauanRatio(e.target.value)}
+                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-teal-600"
+                      />
+                      <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+                        <span>0% Hijauan (Full Konsentrat)</span>
+                        <span>70:30 (Ideal Sapi Maiwa)</span>
+                        <span>100% Hijauan (Pasture)</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Asumsi Kandungan BK dalam Bahan Segar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        % BK Hijauan Segar
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={avgBkHijauan}
+                          onChange={(e) => setAvgBkHijauan(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800"
+                        />
+                        <span className="absolute right-3 top-1.5 text-xs text-slate-400">%</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">Contoh: Rumput Gajah ~20%</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        % BK Konsentrat
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={avgBkKonsentrat}
+                          onChange={(e) => setAvgBkKonsentrat(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800"
+                        />
+                        <span className="absolute right-3 top-1.5 text-xs text-slate-400">%</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">Contoh: Dedak/Jagung ~88%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 3: ASUMSI BIAYA PAKAN LOKAL */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80">
+                <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-amber-100 rounded-lg text-amber-700">
+                      <DollarSign className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800">3. Estimasi Harga Pakan Lokal</h2>
+                      <p className="text-xs text-slate-500">Harga bahan pakan per kg segar di Kecamatan Maiwa</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full">
+                    Langkah 3 dari 3
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Harga Hijauan (Rp / Kg Segar)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">Rp</span>
+                      <input
+                        type="number"
+                        value={priceHijauan}
+                        onChange={(e) => setPriceHijauan(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-9 pr-4 py-2 text-slate-800 font-bold focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">Rata-rata rumput segar di Maiwa: Rp 300 - 400</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Harga Konsentrat (Rp / Kg Segar)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">Rp</span>
+                      <input
+                        type="number"
+                        value={priceKonsentrat}
+                        onChange={(e) => setPriceKonsentrat(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-9 pr-4 py-2 text-slate-800 font-bold focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">Campuran dedak & jagung Maiwa: Rp 4.000 - 5.000</p>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* QUICK SUMMARY PANEL (RIGHT 5 COLS) */}
+            <div className="lg:col-span-5 space-y-6">
+              
+              <div className="bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden border border-emerald-700/50">
+                <div className="absolute top-0 right-0 -mr-6 -mt-6 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl"></div>
+                
+                <div className="flex items-center justify-between pb-4 border-b border-emerald-700/60 mb-5">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-emerald-400" />
+                    <h3 className="font-bold text-lg text-emerald-100">Ringkasan Hasil Analisis</h3>
+                  </div>
+                  <span className="text-[11px] bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-500/30">
+                    Realtime
+                  </span>
+                </div>
+
+                {/* HIGHLIGHT NUMBERS */}
+                <div className="space-y-4">
+                  
+                  {/* Total Pakan Segar Harian */}
+                  <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/10">
+                    <p className="text-xs text-emerald-200 font-medium">TOTAL KEBUTUHAN PAKAN SEGAR (HARIAN)</p>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="text-3xl font-black text-white">
+                        {calculations.totalFreshHarian.toLocaleString('id-ID', { maximumFractionDigits: 1 })}
+                      </span>
+                      <span className="text-sm font-semibold text-emerald-300">Kg / Hari</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-200/70 mt-1">
+                      Untuk {population} ekor ternak ({calculations.freshHijauanHarian.toFixed(1)} kg hijauan + {calculations.freshKonsentratHarian.toFixed(1)} kg konsentrat)
+                    </p>
+                  </div>
+
+                  {/* Kebutuhan Bahan Kering (BK) */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white/5 p-3 rounded-xl border border-white/10">
+                      <p className="text-[11px] text-slate-300">Total BK (Harian)</p>
+                      <p className="text-xl font-bold text-emerald-300 mt-0.5">
+                        {calculations.totalBkHarianKg.toFixed(1)} <span className="text-xs font-normal text-white">kg BK</span>
+                      </p>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-xl border border-white/10">
+                      <p className="text-[11px] text-slate-300">Total BK (Bulanan)</p>
+                      <p className="text-xl font-bold text-emerald-300 mt-0.5">
+                        {calculations.totalBkBulananTon.toFixed(2)} <span className="text-xs font-normal text-white">Ton BK</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* ESTIMASI BIAYA */}
+                  <div className="bg-emerald-950/60 p-4 rounded-xl border border-emerald-500/30">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-emerald-300 font-medium">Estimasi Biaya Pakan (Harian)</span>
+                      <span className="text-sm font-bold text-amber-400">
+                        Rp {Math.round(calculations.totalCostHarian).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-emerald-800/60">
+                      <span className="text-xs text-emerald-300 font-medium">Estimasi Biaya Pakan (Bulanan)</span>
+                      <span className="text-base font-extrabold text-amber-300">
+                        Rp {Math.round(calculations.totalCostBulanan).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* NUTRIENT CARD */}
+                  <div className="bg-white/5 p-4 rounded-xl border border-white/10 space-y-2">
+                    <p className="text-xs font-bold text-emerald-200">Estimasi Kebutuhan Nutrisi Terpenuhi</p>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300">Protein Kasar (PK Minimum):</span>
+                      <span className="font-bold text-white">{calculations.reqPK.toFixed(1)}%</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300">TDN (Total Energi):</span>
+                      <span className="font-bold text-white">{calculations.reqTDN.toFixed(1)}%</span>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={() => setActiveTab('hasil')}
+                    className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
+                  >
+                    Lihat Grafik Detail
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+              </div>
+
+              {/* CARD INFORMASI CEPAT MAIWA */}
+              <div className="bg-emerald-50 rounded-2xl p-5 border border-emerald-200 text-emerald-900">
+                <div className="flex items-start gap-3">
+                  <Info className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-800">Catatan Peternakan Maiwa:</h4>
+                    <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
+                      Kecamatan Maiwa kaya akan suplai <strong>Rumput Gajah</strong> dan <strong>Limbah Jagung/Padi</strong>. Untuk efisiensi biaya, dianjurkan menggunakan sistem fermentasi jerami padi dan perbanyakan leguminosa (Gamal/Lamtoro) di sekitar pagar kebun.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 2: HASIL & VISUALISASI GRAFIK */}
+        {activeTab === 'hasil' && (
+          <div className="space-y-8">
+            
+            {/* ACTION BAR */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200 print:hidden">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Laporan & Visualisasi Hasil Analisis</h2>
+                <p className="text-xs text-slate-500">Rincian alokasi kebutuhan pakan dan estimasi anggaran operasional</p>
+              </div>
+              <button
+                onClick={handlePrint}
+                className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition shadow-md"
+              >
+                <Printer className="w-4 h-4" />
+                Cetak / Ekspor Laporan PDF
+              </button>
+            </div>
+
+            {/* TABEL RINGKASAN REKAPITULASI */}
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+              <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-emerald-600" />
+                Tabel Rincian Kebutuhan Pakan Maiwa
+              </h3>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-700 border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 border-b border-slate-200 text-slate-800 font-bold uppercase">
+                      <th className="p-3 rounded-l-lg">Kategori Pakan</th>
+                      <th className="p-3">BK Harian (Kg)</th>
+                      <th className="p-3">Pakan Segar Harian (Kg)</th>
+                      <th className="p-3">Pakan Segar Bulanan (Ton)</th>
+                      <th className="p-3">Biaya Harian (Rp)</th>
+                      <th className="p-3 rounded-r-lg">Biaya Bulanan (Rp)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-3 font-semibold text-emerald-800 flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                        Hijauan Segar
+                      </td>
+                      <td className="p-3 font-medium">{calculations.bkHijauanHarian.toFixed(1)} kg</td>
+                      <td className="p-3 font-bold text-slate-900">{calculations.freshHijauanHarian.toFixed(1)} kg</td>
+                      <td className="p-3 font-medium">{(calculations.freshHijauanBulanan / 1000).toFixed(2)} Ton</td>
+                      <td className="p-3 font-medium">Rp {Math.round(calculations.costHijauanHarian).toLocaleString('id-ID')}</td>
+                      <td className="p-3 font-bold text-slate-900">Rp {Math.round(calculations.costHijauanHarian * 30).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-3 font-semibold text-teal-800 flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-teal-600"></span>
+                        Konsentrat / Olahan
+                      </td>
+                      <td className="p-3 font-medium">{calculations.bkKonsentratHarian.toFixed(1)} kg</td>
+                      <td className="p-3 font-bold text-slate-900">{calculations.freshKonsentratHarian.toFixed(1)} kg</td>
+                      <td className="p-3 font-medium">{(calculations.freshKonsentratBulanan / 1000).toFixed(2)} Ton</td>
+                      <td className="p-3 font-medium">Rp {Math.round(calculations.costKonsentratHarian).toLocaleString('id-ID')}</td>
+                      <td className="p-3 font-bold text-slate-900">Rp {Math.round(calculations.costKonsentratHarian * 30).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr className="bg-emerald-50/60 font-bold text-slate-900">
+                      <td className="p-3">TOTAL KESELURUHAN</td>
+                      <td className="p-3">{calculations.totalBkHarianKg.toFixed(1)} kg</td>
+                      <td className="p-3 text-emerald-700">{calculations.totalFreshHarian.toFixed(1)} kg</td>
+                      <td className="p-3 text-emerald-700">{(calculations.totalFreshBulanan / 1000).toFixed(2)} Ton</td>
+                      <td className="p-3 text-amber-700">Rp {Math.round(calculations.totalCostHarian).toLocaleString('id-ID')}</td>
+                      <td className="p-3 text-amber-700">Rp {Math.round(calculations.totalCostBulanan).toLocaleString('id-ID')}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* VISUALISASI GRAFIK */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              
+              {/* PIE CHART PROPORSI PAKAN SEGAR */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                <h3 className="text-base font-bold text-slate-800 mb-1 flex items-center gap-2">
+                  <PieIcon className="w-5 h-5 text-emerald-600" />
+                  Proporsi Pakan Segar Harian (Kg)
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">Perbandingan berat segar hijauan vs konsentrat</p>
+                
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={90}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {pieChartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => [`${value} kg`, 'Jumlah Segar']} />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* BAR CHART BIAYA VS SEGARKG */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                <h3 className="text-base font-bold text-slate-800 mb-1 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-teal-600" />
+                  Perbandingan Biaya Pakan Harian (Rp)
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">Alokasi anggaran pakan per komponen</p>
+
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={barChartData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="name" />
+                      <YAxis yAxisId="left" orientation="left" stroke="#0d9488" />
+                      <Tooltip formatter={(value) => [`Rp ${value.toLocaleString('id-ID')}`, 'Biaya Harian']} />
+                      <Legend />
+                      <Bar yAxisId="left" dataKey="Biaya" fill="#0d9488" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 3: TABEL REFERENSI PAKAN LOKAL MAIWA */}
+        {activeTab === 'referensi' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <BookOpen className="w-6 h-6 text-emerald-600" />
+                    Database Pakan Ternak Lokal Maiwa
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Kandungan Bahan Kering (BK), Protein Kasar (PK), TDN, serta estimasi harga lokal di Kecamatan Maiwa
+                  </p>
+                </div>
+                <span className="text-xs bg-emerald-100 text-emerald-800 font-bold px-3 py-1.5 rounded-full border border-emerald-200 self-start md:self-auto">
+                  8 Jenis Pakan Utama Maiwa
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-700">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-800 font-bold uppercase tracking-wider border-b border-slate-200">
+                      <th className="p-3.5 rounded-l-lg">Nama Bahan Pakan</th>
+                      <th className="p-3.5">Kategori</th>
+                      <th className="p-3.5">% BK</th>
+                      <th className="p-3.5">% PK (Protein)</th>
+                      <th className="p-3.5">% TDN (Energi)</th>
+                      <th className="p-3.5">Harga Est. / Kg</th>
+                      <th className="p-3.5 rounded-r-lg">Sumber Utama di Maiwa</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {LOCAL_FEEDS.map((feed, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3.5 font-bold text-slate-900">{feed.name}</td>
+                        <td className="p-3.5">
+                          <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md font-medium text-[11px]">
+                            {feed.category}
+                          </span>
+                        </td>
+                        <td className="p-3.5 font-semibold text-emerald-700">{feed.bk}%</td>
+                        <td className="p-3.5 font-semibold text-teal-700">{feed.pk}%</td>
+                        <td className="p-3.5 font-semibold text-indigo-700">{feed.tdn}%</td>
+                        <td className="p-3.5 font-bold text-amber-700">Rp {feed.price.toLocaleString('id-ID')}</td>
+                        <td className="p-3.5 text-slate-500 italic">{feed.source}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* CARD REKOMENDASI FORMULASI UNTUK SAPI MAIWA */}
+            <div className="bg-gradient-to-r from-teal-900 to-emerald-900 text-white rounded-2xl p-6 shadow-md border border-teal-700">
+              <h3 className="text-lg font-bold text-emerald-200 mb-2 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                Tips Rekomendasi Peternak Maiwa (Enrekang)
+              </h3>
+              <ul className="text-xs text-slate-200 space-y-2.5 list-disc list-inside leading-relaxed">
+                <li>
+                  <strong>Pemanfaatan Jagung Maiwa:</strong> Jagung giling lokal Maiwa merupakan sumber energi terbaik. Campurkan dedak padi dan bungkil kelapa dengan perbandingan 4:4:2 untuk konsentrat murah berkualitas tinggi.
+                </li>
+                <li>
+                  <strong>Integrasi Leguminosa:</strong> Tanam pohon Gamal atau Lamtoro di sekeliling kebun. Menambahkan 15-20% Gamal pada pakan rumput segar dapat meningkatkan bobot harian sapi secara signifikan tanpa biaya konsentrat berlebih.
+                </li>
+                <li>
+                  <strong>Pengolahan Amoniasi Jerami:</strong> Saat musim panen padi di Maiwa, kumpulkan jerami dan olah dengan amoniasi/fermentasi urea untuk meningkatkan daya cerna dan kadar protein kasar dari 4% menjadi 7-8%.
+                </li>
+              </ul>
+            </div>
+
+          </div>
+        )}
+
+      </main>
+
+      {/* FOOTER */}
+      <footer className="bg-slate-900 text-slate-400 text-xs py-6 border-t border-slate-800 mt-12 print:hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center space-x-2">
+            <Beef className="w-5 h-5 text-emerald-500" />
+            <span className="font-semibold text-slate-200">Maiwa Feed Calculator & Analysis System</span>
+          </div>
+          <p className="text-center sm:text-right text-slate-500">
+            Dikembangkan untuk Pengembangan Sektor Peternakan Kecamatan Maiwa, Kabupaten Enrekang.
+          </p>
+        </div>
+      </footer>
+
+    </div>
+  );
+}
